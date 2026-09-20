@@ -1,0 +1,10 @@
+.gradle/
+build/
+LookAtMeApp/build/
+LookAtMeApp/app/build/
+LookAtMeApp/.gradle/
+LookAtMeApp/.idea/
+.idea/
+*.iml
+.DS_Store
+local.properties
