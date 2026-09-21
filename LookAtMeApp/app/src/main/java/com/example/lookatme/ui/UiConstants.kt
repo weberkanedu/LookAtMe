@@ -56,8 +56,63 @@ val CategoryColors = mapOf(
     "lang"     to Triple(Color(0xFF22C55E), Color(0x1F22C55E), Color(0xFFDCFCE7)),
 )
 
-fun categoryAccent(cat: String)  = CategoryColors[cat]?.first  ?: Color(0xFF64748B)
-fun categoryBgTint(cat: String)  = CategoryColors[cat]?.second ?: Color(0x1F64748B)
+fun parseColorHex(hex: String, defaultColor: Color = Color(0xFF4F8EF7)): Color {
+    if (hex.isBlank()) return defaultColor
+    return try {
+        val clean = hex.removePrefix("#")
+        val colorInt = when (clean.length) {
+            6 -> (0xFF000000 or clean.toLong(16)).toInt()
+            8 -> clean.toLong(16).toInt()
+            else -> return defaultColor
+        }
+        Color(colorInt)
+    } catch (_: Exception) {
+        defaultColor
+    }
+}
+
+fun categoryAccent(cat: String, customColorHex: String = ""): Color {
+    if (customColorHex.isNotBlank()) {
+        return parseColorHex(customColorHex, CategoryColors[cat]?.first ?: Color(0xFF64748B))
+    }
+    return CategoryColors[cat]?.first ?: Color(0xFF64748B)
+}
+
+fun categoryBgTint(cat: String, customColorHex: String = ""): Color {
+    if (customColorHex.isNotBlank()) {
+        return parseColorHex(customColorHex, Color(0xFF64748B)).copy(alpha = 0.15f)
+    }
+    return CategoryColors[cat]?.second ?: Color(0x1F64748B)
+}
+
+// 40-color palette matching the screenshot!
+val PRESET_PALETTE_COLORS = listOf(
+    // Row 1: Reds, corals, oranges
+    Color(0xFFFF3B30), Color(0xFFFF5252), Color(0xFFD32F2F), Color(0xFFFF4081), Color(0xFFFF1493), Color(0xFFFF8C00), Color(0xFFFF6D00), Color(0xFFFF5722),
+    // Row 2: Ambers, yellows, limes, greens
+    Color(0xFFF57C00), Color(0xFFFFB300), Color(0xFFFFD600), Color(0xFFFFEB3B), Color(0xFFCDDC39), Color(0xFFAEEA00), Color(0xFF76FF03), Color(0xFF4CAF50),
+    // Row 3: Emeralds, mint, teals, cyans
+    Color(0xFF00C853), Color(0xFF10B981), Color(0xFF26A69A), Color(0xFF4DD0E1), Color(0xFF00838F), Color(0xFF00ACC1), Color(0xFF00B4D8), Color(0xFF48CAE4),
+    // Row 4: Sky, blues, indigos, purples
+    Color(0xFF007AFF), Color(0xFF1E88E5), Color(0xFF2196F3), Color(0xFF4F8EF7), Color(0xFF5C6BC0), Color(0xFF6366F1), Color(0xFF7E57C2), Color(0xFF673AB7),
+    // Row 5: Purples, fuchsias, pinks, browns, grays, white
+    Color(0xFFAB47BC), Color(0xFFE040FB), Color(0xFFEC4899), Color(0xFF8D6E63), Color(0xFF795548), Color(0xFF9E9E9E), Color(0xFF607D8B), Color(0xFFFFFFFF)
+)
+
+data class CoverStyle(
+    val id: String,
+    val name: String,
+    val gradientColors: List<Color>
+)
+
+val PRESET_COVER_STYLES = listOf(
+    CoverStyle("default", "Standart", emptyList()),
+    CoverStyle("gradient_sunset", "Günbatımı", listOf(Color(0xFFFF512F), Color(0xFFDD2476))),
+    CoverStyle("gradient_ocean", "Okyanus", listOf(Color(0xFF2193b0), Color(0xFF6dd5ed))),
+    CoverStyle("gradient_emerald", "Zümrüt", listOf(Color(0xFF11998e), Color(0xFF38ef7d))),
+    CoverStyle("gradient_purple", "Neon Mor", listOf(Color(0xFF8A2387), Color(0xFFE94057))),
+    CoverStyle("solid", "Renk Tonu", emptyList())
+)
 
 val CategoryLabels = mapOf(
     "study"    to "Ders",

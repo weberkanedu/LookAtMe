@@ -1,12 +1,15 @@
 package com.example.lookatme
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -49,8 +52,11 @@ class MainActivity : ComponentActivity() {
         val repo = Repository(db)
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val existing = repo.slotsForDateOnce(LocalDate.of(2026, 9, 20))
-            if (existing.isEmpty()) repo.seedDefaultData()
+            val prefs = getSharedPreferences("lookatme_prefs", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("cleared_initial_hardcoded_v2", false)) {
+                repo.clearAllSlots()
+                prefs.edit().putBoolean("cleared_initial_hardcoded_v2", true).apply()
+            }
             NotificationScheduler.scheduleForToday(this@MainActivity, repo)
         }
 
@@ -75,7 +81,6 @@ enum class Screen { CALENDAR, REPORT, SETTINGS }
 fun LookAtMeApp(viewModel: LookAtMeViewModel) {
     var currentScreen      by remember { mutableStateOf(Screen.CALENDAR) }
     var isEditMode         by remember { mutableStateOf(false) }
-    var triggerAddSheet    by remember { mutableStateOf(false) }
     val isDark             by viewModel.isDarkMode.collectAsState()
     val colors             = if (isDark) DarkThemeColors else LightThemeColors
     val snackbarHostState  = remember { SnackbarHostState() }
@@ -95,7 +100,6 @@ fun LookAtMeApp(viewModel: LookAtMeViewModel) {
             TopBar(
                 viewModel = viewModel,
                 currentScreen = currentScreen,
-                onAddTask = { triggerAddSheet = true },
                 onGoToday = {
                     viewModel.selectDate(LocalDate.now())
                     currentScreen = Screen.CALENDAR
@@ -108,23 +112,15 @@ fun LookAtMeApp(viewModel: LookAtMeViewModel) {
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
         ) {
-            AnimatedContent(
-                targetState = currentScreen,
-                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
-                label = "screen_transition"
-            ) { screen ->
-                when (screen) {
-                    Screen.CALENDAR -> CalendarScreen(
-                        viewModel = viewModel,
-                        isEditMode = isEditMode,
-                        onToggleEditMode = { isEditMode = !isEditMode },
-                        triggerAddSheet = triggerAddSheet,
-                        onAddSheetTriggered = { triggerAddSheet = false }
-                    )
-                    Screen.REPORT   -> HistoryScreen(viewModel)
-                    Screen.SETTINGS -> SettingsScreen(viewModel) { msg ->
-                        scope.launch { snackbarHostState.showSnackbar(msg) }
-                    }
+            when (currentScreen) {
+                Screen.CALENDAR -> CalendarScreen(
+                    viewModel = viewModel,
+                    isEditMode = isEditMode,
+                    onToggleEditMode = { isEditMode = !isEditMode }
+                )
+                Screen.REPORT   -> HistoryScreen(viewModel)
+                Screen.SETTINGS -> SettingsScreen(viewModel) { msg ->
+                    scope.launch { snackbarHostState.showSnackbar(msg) }
                 }
             }
 
@@ -148,7 +144,6 @@ fun LookAtMeApp(viewModel: LookAtMeViewModel) {
 fun TopBar(
     viewModel: LookAtMeViewModel,
     currentScreen: Screen,
-    onAddTask: () -> Unit,
     onGoToday: () -> Unit
 ) {
     val today   = LocalDate.now()
@@ -193,36 +188,20 @@ fun TopBar(
             }
 
             if (currentScreen == Screen.CALENDAR) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Go to today icon button
+                IconButton(
+                    onClick = onGoToday,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(colors.bgCard)
+                        .border(1.dp, colors.border, CircleShape)
                 ) {
-                    // Add task "+" button (Directly opens task creation sheet)
-                    IconButton(
-                        onClick = onAddTask,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Brush.linearGradient(listOf(Color(0xFF4F8EF7), Color(0xFFA855F7))))
-                    ) {
-                        Text("+", fontSize = 22.sp, fontWeight = FontWeight.Black, color = Color.White)
-                    }
-
-                    // Go to today icon button
-                    IconButton(
-                        onClick = onGoToday,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(colors.bgCard)
-                            .border(1.dp, colors.border, CircleShape)
-                    ) {
-                        LucideNavIcon(
-                            name = "today",
-                            tint = colors.text1,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                    LucideNavIcon(
+                        name = "today",
+                        tint = colors.text1,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
         }
@@ -249,6 +228,7 @@ fun BottomNavBar(
     modifier: Modifier = Modifier
 ) {
     val isDark by viewModel.isDarkMode.collectAsState()
+    val view = androidx.compose.ui.platform.LocalView.current
 
     // Floating pill container with bottom navigation padding
     Box(
@@ -260,10 +240,10 @@ fun BottomNavBar(
     ) {
         Surface(
             shape = RoundedCornerShape(50.dp),
-            color = if (isDark) Color(0xFF1A1A2E) else Color(0xFF1C1C1E),
-            shadowElevation = 16.dp,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = if (isDark) 0.10f else 0.15f)),
-            modifier = Modifier.fillMaxWidth(0.88f)
+            color = Color(0xFF141424),
+            shadowElevation = 18.dp,
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+            modifier = Modifier.fillMaxWidth(0.90f)
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
@@ -272,32 +252,76 @@ fun BottomNavBar(
             ) {
                 navItems.forEach { item ->
                     val isActive = currentScreen == item.screen
+                    val iconScale by animateFloatAsState(
+                        targetValue = if (isActive) 1.14f else 1.0f,
+                        animationSpec = spring(dampingRatio = 0.55f, stiffness = 500f),
+                        label = "icon_bounce"
+                    )
+
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50.dp))
-                            .background(if (isActive) Color(0xFFA855F7).copy(alpha = 0.22f) else Color.Transparent)
+                            .background(
+                                if (isActive)
+                                    Brush.linearGradient(
+                                        listOf(
+                                            Color(0xFF4F8EF7).copy(alpha = 0.28f),
+                                            Color(0xFFA855F7).copy(alpha = 0.28f)
+                                        )
+                                    )
+                                else
+                                    Brush.linearGradient(
+                                        listOf(
+                                            Color.Transparent,
+                                            Color.Transparent
+                                        )
+                                    )
+                            )
                             .clickable(
                                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                                 indication = null
-                            ) { onNavigate(item.screen) }
-                            .padding(horizontal = if (isActive) 16.dp else 14.dp, vertical = 10.dp),
+                            ) {
+                                if (currentScreen != item.screen) {
+                                    try {
+                                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                                    } catch (_: Exception) {}
+                                    onNavigate(item.screen)
+                                }
+                            }
+                            .padding(horizontal = if (isActive) 18.dp else 12.dp, vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            LucideNavIcon(
-                                name = item.iconName,
-                                tint = if (isActive) Color(0xFFA855F7) else Color(0xFF9CA3AF),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            if (isActive) {
+                            Box(
+                                modifier = Modifier.graphicsLayer(
+                                    scaleX = iconScale,
+                                    scaleY = iconScale
+                                )
+                            ) {
+                                LucideNavIcon(
+                                    name = item.iconName,
+                                    tint = if (isActive) Color(0xFFA855F7) else Color(0xFF9CA3AF),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            AnimatedVisibility(
+                                visible = isActive,
+                                enter = fadeIn(tween(180)) + expandHorizontally(
+                                    animationSpec = spring(dampingRatio = 0.75f, stiffness = 420f)
+                                ),
+                                exit = fadeOut(tween(120)) + shrinkHorizontally(
+                                    animationSpec = spring(dampingRatio = 0.75f, stiffness = 420f)
+                                )
+                            ) {
                                 Text(
                                     item.label,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFFA855F7)
+                                    color = Color(0xFFA855F7),
+                                    maxLines = 1
                                 )
                             }
                         }

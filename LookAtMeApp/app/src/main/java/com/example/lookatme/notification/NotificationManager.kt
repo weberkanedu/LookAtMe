@@ -18,7 +18,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-const val CHANNEL_ID = "lookatme_slot_check"
+import android.media.AudioAttributes
+import android.net.Uri
+import com.example.lookatme.R
+
+const val CHANNEL_ID = "lookatme_slot_check_v2"
 const val ACTION_MARK_DONE   = "com.example.lookatme.MARK_DONE"
 const val ACTION_MARK_MISSED = "com.example.lookatme.MARK_MISSED"
 const val EXTRA_SLOT_ID   = "slot_id"
@@ -26,6 +30,17 @@ const val EXTRA_SLOT_DATE = "slot_date"
 const val EXTRA_NOTIF_ID  = "notif_id"
 
 fun createNotificationChannel(context: Context) {
+    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    try {
+        nm.deleteNotificationChannel("lookatme_slot_check")
+    } catch (_: Exception) {}
+
+    val soundUri = Uri.parse("android.resource://${context.packageName}/${R.raw.lookatme_bell}")
+    val audioAttributes = AudioAttributes.Builder()
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+        .build()
+
     val channel = NotificationChannel(
         CHANNEL_ID,
         "Görev Bildirimleri",
@@ -33,8 +48,8 @@ fun createNotificationChannel(context: Context) {
     ).apply {
         description = "LookAtMe görev takip bildirimleri"
         enableVibration(true)
+        setSound(soundUri, audioAttributes)
     }
-    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     nm.createNotificationChannel(channel)
 }
 
@@ -63,17 +78,19 @@ fun sendSlotCheckNotification(
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
+    val soundUri = Uri.parse("android.resource://${context.packageName}/${R.raw.lookatme_bell}")
     val notif = NotificationCompat.Builder(context, CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_popup_reminder)
-        .setContentTitle("$slotEmoji $slotTitle")
-        .setContentText("Bu etkinlik tamamlandı mı?")
+        .setContentTitle(slotTitle)
+        .setContentText("Bu görev için durum bilgisini gir!")
         .setStyle(NotificationCompat.BigTextStyle()
-            .bigText("Görev bitti! $slotEmoji $slotTitle\nYapıldı mı yoksa yapılmadı mı?"))
+            .bigText("\"$slotTitle\"\nBu görev için durum bilgisini gir!"))
         .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setSound(soundUri)
         .setContentIntent(openPi)
         .setAutoCancel(true)
-        .addAction(android.R.drawable.checkbox_on_background, "✅ Yapıldı",   actionPi(ACTION_MARK_DONE))
-        .addAction(android.R.drawable.ic_delete,              "❌ Yapılmadı", actionPi(ACTION_MARK_MISSED))
+        .addAction(android.R.drawable.checkbox_on_background, "Yapıldı",   actionPi(ACTION_MARK_DONE))
+        .addAction(android.R.drawable.ic_delete,              "Yapılmadı", actionPi(ACTION_MARK_MISSED))
         .build()
 
     try {

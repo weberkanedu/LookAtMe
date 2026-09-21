@@ -15,13 +15,27 @@ data class SlotEntity(
     val title: String,
     val emoji: String = "📌",
     val subtitle: String = "",
-    val category: String = "study",   // study | sport | bilsem | lang | rest
+    val category: String = "study",   // study | sport | bilsem | lang | rest | custom
     val startTime: String,            // "HH:mm"
     val endTime: String,              // "HH:mm"
     val dayOfWeek: Int,               // 0-6 for recurring; -1 for one-off
     val specificDate: String = "",    // "yyyy-MM-dd" when dayOfWeek == -1
     val isRecurring: Boolean = true,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    val colorHex: String = "",        // optional custom color hex e.g. #3B82F6
+    val bgStyle: String = "default"   // default | gradient_sunset | gradient_ocean | gradient_emerald | gradient_purple | solid
+)
+
+/**
+ * Custom category entity with icon, color and background styling
+ */
+@Entity(tableName = "categories")
+data class CategoryEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val iconName: String = "star",
+    val colorHex: String = "#4F8EF7",
+    val bgStyle: String = "default"
 )
 
 /**
@@ -41,6 +55,24 @@ data class CompletionEntity(
 )
 
 // ─── DAOs ────────────────────────────────────────────────────────
+
+@Dao
+interface CategoryDao {
+    @Query("SELECT * FROM categories ORDER BY name ASC")
+    fun getAllFlow(): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM categories ORDER BY name ASC")
+    suspend fun getAllOnce(): List<CategoryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(category: CategoryEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(categories: List<CategoryEntity>)
+
+    @Query("DELETE FROM categories WHERE id = :id")
+    suspend fun delete(id: String)
+}
 
 @Dao
 interface SlotDao {
@@ -77,6 +109,9 @@ interface SlotDao {
 
 @Dao
 interface CompletionDao {
+    @Query("SELECT * FROM completions")
+    fun getAllFlow(): Flow<List<CompletionEntity>>
+
     @Query("SELECT * FROM completions WHERE date = :date")
     fun getForDate(date: String): Flow<List<CompletionEntity>>
 
@@ -99,14 +134,35 @@ interface CompletionDao {
     suspend fun deleteRange(fromDate: String, toDate: String)
 }
 
-// ─── Database ────────────────────────────────────────────────────
+// ─── Database & Migration ────────────────────────────────────────
+
+val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `categories` (
+                `id` TEXT NOT NULL PRIMARY KEY,
+                `name` TEXT NOT NULL,
+                `iconName` TEXT NOT NULL,
+                `colorHex` TEXT NOT NULL,
+                `bgStyle` TEXT NOT NULL
+            )
+        """.trimIndent())
+        try {
+            db.execSQL("ALTER TABLE `slots` ADD COLUMN `colorHex` TEXT NOT NULL DEFAULT ''")
+        } catch (_: Exception) {}
+        try {
+            db.execSQL("ALTER TABLE `slots` ADD COLUMN `bgStyle` TEXT NOT NULL DEFAULT 'default'")
+        } catch (_: Exception) {}
+    }
+}
 
 @Database(
-    entities = [SlotEntity::class, CompletionEntity::class],
-    version = 1,
+    entities = [SlotEntity::class, CompletionEntity::class, CategoryEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun slotDao(): SlotDao
     abstract fun completionDao(): CompletionDao
+    abstract fun categoryDao(): CategoryDao
 }

@@ -16,63 +16,22 @@ object DatabaseProvider {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "lookatme.db"
-            ).build().also { INSTANCE = it }
+            ).addMigrations(MIGRATION_1_2).fallbackToDestructiveMigration().build().also { INSTANCE = it }
         }
     }
 }
 
-// ─── Default weekly template data ────────────────────────────────
+// ─── Default Categories (Empty - user creates their own via UI) ──
+val DEFAULT_CATEGORIES: List<CategoryEntity> = emptyList()
 
-val DEFAULT_SLOTS: List<SlotEntity> = listOf(
-    // Monday (0)
-    SlotEntity(title="Gün Tekrarı",            emoji="🔁", subtitle="Okul dersleri tarama",        category="study",  startTime="16:15", endTime="16:45", dayOfWeek=0),
-    SlotEntity(title="1. Çalışma Bloku",       emoji="📐", subtitle="Günün konuları soru çözümü",  category="study",  startTime="17:00", endTime="18:00", dayOfWeek=0),
-    SlotEntity(title="2. Çalışma Bloku",       emoji="🔬", subtitle="Soru çözümü & okul ödevleri",category="study",  startTime="18:15", endTime="19:15", dayOfWeek=0),
-    SlotEntity(title="Akşam Yemeği",           emoji="🍽️", subtitle="",                            category="rest",   startTime="19:15", endTime="20:15", dayOfWeek=0),
-    SlotEntity(title="Hızlı Okuma & Paragraf", emoji="📖", subtitle="",                            category="study",  startTime="20:15", endTime="21:00", dayOfWeek=0),
-    // Tuesday (1)
-    SlotEntity(title="Gün Tekrarı",            emoji="🔁", subtitle="",                            category="study",  startTime="16:15", endTime="16:45", dayOfWeek=1),
-    SlotEntity(title="Soru Çözümü & Ödev",    emoji="✍️", subtitle="",                            category="study",  startTime="17:00", endTime="18:15", dayOfWeek=1),
-    SlotEntity(title="Çıkış & Ulaşım",         emoji="🎒", subtitle="",                            category="sport",  startTime="18:30", endTime="19:00", dayOfWeek=1),
-    SlotEntity(title="Basketbol Antrenmanı",   emoji="🏀", subtitle="",                            category="sport",  startTime="19:00", endTime="20:15", dayOfWeek=1),
-    SlotEntity(title="Dönüş & Duş",            emoji="🚿", subtitle="",                            category="rest",   startTime="20:15", endTime="21:00", dayOfWeek=1),
-    SlotEntity(title="Hafif Okuma / Paragraf", emoji="📑", subtitle="",                            category="study",  startTime="21:00", endTime="21:30", dayOfWeek=1),
-    // Wednesday (2)
-    SlotEntity(title="Gün Tekrarı",            emoji="🔁", subtitle="",                            category="study",  startTime="16:15", endTime="16:45", dayOfWeek=2),
-    SlotEntity(title="1. Çalışma Bloku",       emoji="📖", subtitle="Günün konuları soru çözümü",  category="study",  startTime="17:00", endTime="18:00", dayOfWeek=2),
-    SlotEntity(title="2. Çalışma Bloku",       emoji="📐", subtitle="Soru çözümü & ödevler",       category="study",  startTime="18:15", endTime="19:15", dayOfWeek=2),
-    SlotEntity(title="Akşam Yemeği",           emoji="🍽️", subtitle="",                            category="rest",   startTime="19:15", endTime="20:15", dayOfWeek=2),
-    SlotEntity(title="Eksik Tamamlama",        emoji="✨", subtitle="",                            category="study",  startTime="20:15", endTime="21:00", dayOfWeek=2),
-    // Thursday (3)
-    SlotEntity(title="Gün Tekrarı",            emoji="🔁", subtitle="",                            category="study",  startTime="16:15", endTime="16:45", dayOfWeek=3),
-    SlotEntity(title="Soru Çözümü & Ödev",    emoji="✍️", subtitle="",                            category="study",  startTime="17:00", endTime="18:15", dayOfWeek=3),
-    SlotEntity(title="Çıkış & Ulaşım",         emoji="🎒", subtitle="",                            category="sport",  startTime="18:30", endTime="19:00", dayOfWeek=3),
-    SlotEntity(title="Basketbol Antrenmanı",   emoji="🏀", subtitle="",                            category="sport",  startTime="19:00", endTime="20:15", dayOfWeek=3),
-    SlotEntity(title="Dönüş & Duş",            emoji="🚿", subtitle="",                            category="rest",   startTime="20:15", endTime="21:00", dayOfWeek=3),
-    SlotEntity(title="İngilizce Kelime",       emoji="🔤", subtitle="",                            category="study",  startTime="21:00", endTime="21:30", dayOfWeek=3),
-    // Friday (4)
-    SlotEntity(title="Ara Öğün & Hazırlık",   emoji="🥪", subtitle="",                            category="rest",   startTime="16:00", endTime="16:30", dayOfWeek=4),
-    SlotEntity(title="BİLSEM Ulaşım",          emoji="🚶", subtitle="",                            category="bilsem", startTime="16:30", endTime="16:50", dayOfWeek=4),
-    SlotEntity(title="BİLSEM Dersi",           emoji="🏫", subtitle="",                            category="bilsem", startTime="16:50", endTime="20:00", dayOfWeek=4),
-    SlotEntity(title="Eve Dönüş",              emoji="🏠", subtitle="",                            category="rest",   startTime="20:00", endTime="20:30", dayOfWeek=4),
-    SlotEntity(title="Serbest Zaman",          emoji="🛋️", subtitle="",                            category="rest",   startTime="20:30", endTime="21:30", dayOfWeek=4),
-    // Saturday (5)
-    SlotEntity(title="İngilizce Kursu",        emoji="🇬🇧", subtitle="09:30 varış",               category="lang",   startTime="09:30", endTime="13:10", dayOfWeek=5),
-    SlotEntity(title="Dönüş & Öğle Yemeği",   emoji="🍝", subtitle="",                            category="rest",   startTime="13:10", endTime="14:00", dayOfWeek=5),
-    SlotEntity(title="Cuma Tekrarı & Soru",   emoji="📝", subtitle="",                            category="study",  startTime="14:00", endTime="15:15", dayOfWeek=5),
-    SlotEntity(title="Çıkış & Ulaşım",         emoji="🎒", subtitle="",                            category="sport",  startTime="15:30", endTime="16:00", dayOfWeek=5),
-    SlotEntity(title="Basketbol Antrenmanı",   emoji="🏀", subtitle="",                            category="sport",  startTime="16:00", endTime="17:15", dayOfWeek=5),
-    SlotEntity(title="Dönüş & Dinlenme",       emoji="🚿", subtitle="",                            category="rest",   startTime="17:15", endTime="18:00", dayOfWeek=5),
-    SlotEntity(title="Ödev & Soru Çözümü",    emoji="📚", subtitle="",                            category="study",  startTime="18:30", endTime="19:30", dayOfWeek=5),
-    // Sunday (6)
-    SlotEntity(title="1. Blok: Deneme/Tekrar",emoji="📊", subtitle="",                            category="study",  startTime="10:30", endTime="12:00", dayOfWeek=6),
-    SlotEntity(title="Öğle Yemeği & Dinlenme",emoji="🥗", subtitle="",                            category="rest",   startTime="12:00", endTime="13:30", dayOfWeek=6),
-    SlotEntity(title="2. Blok: Soru Çözümü",  emoji="📐", subtitle="",                            category="study",  startTime="13:30", endTime="15:00", dayOfWeek=6),
-    SlotEntity(title="Çıkış & Ulaşım",         emoji="🎒", subtitle="",                            category="sport",  startTime="15:30", endTime="16:00", dayOfWeek=6),
-    SlotEntity(title="Basketbol Antrenmanı",   emoji="🏀", subtitle="",                            category="sport",  startTime="16:00", endTime="17:15", dayOfWeek=6),
-    SlotEntity(title="Dönüş & Duş",            emoji="🚿", subtitle="",                            category="rest",   startTime="17:15", endTime="18:00", dayOfWeek=6),
-    SlotEntity(title="Hafta Kapanışı",         emoji="🎒", subtitle="",                            category="study",  startTime="18:30", endTime="19:30", dayOfWeek=6),
+val OLD_DEFAULT_CATEGORY_IDS = setOf(
+    "finance", "fitness", "health", "study", "mindfulness", "productivity", "code", "rest"
 )
+
+// ─── Default weekly template data (empty by default - user creates their own) ───
+
+val DEFAULT_SLOTS: List<SlotEntity> = emptyList()
+
 
 // ─── Repository ──────────────────────────────────────────────────
 
@@ -97,6 +56,8 @@ class Repository(private val db: AppDatabase) {
         return (db.slotDao().getRecurringForDayOnce(dow) + db.slotDao().getOneOffForDateOnce(dateStr))
             .sortedBy { it.startTime }
     }
+
+    fun allCompletions(): Flow<List<CompletionEntity>> = db.completionDao().getAllFlow()
 
     fun completionsForDate(date: LocalDate): Flow<List<CompletionEntity>> {
         return db.completionDao().getForDate(date.format(ISO))
@@ -135,6 +96,32 @@ class Repository(private val db: AppDatabase) {
     fun allActiveSlots(): Flow<List<SlotEntity>> = db.slotDao().getAllActive()
 
     suspend fun getSlotById(id: Long): SlotEntity? = db.slotDao().getById(id)
+
+    suspend fun clearAllSlots() {
+        db.slotDao().deleteAll()
+    }
+
+    // ─── Categories ───────────────────────────────────────────────
+
+    fun allCategories(): Flow<List<CategoryEntity>> = db.categoryDao().getAllFlow()
+
+    suspend fun getAllCategoriesOnce(): List<CategoryEntity> {
+        return db.categoryDao().getAllOnce()
+    }
+
+    suspend fun clearDefaultCategories() {
+        OLD_DEFAULT_CATEGORY_IDS.forEach { id ->
+            db.categoryDao().delete(id)
+        }
+    }
+
+    suspend fun insertCategory(category: CategoryEntity) {
+        db.categoryDao().insert(category)
+    }
+
+    suspend fun deleteCategory(id: String) {
+        db.categoryDao().delete(id)
+    }
 
     suspend fun seedDefaultData() {
         DEFAULT_SLOTS.forEach { db.slotDao().insert(it) }

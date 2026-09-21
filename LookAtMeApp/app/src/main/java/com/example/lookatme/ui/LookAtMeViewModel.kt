@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.lookatme.data.*
 import com.example.lookatme.notification.NotificationScheduler
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import android.content.Context
@@ -22,7 +23,9 @@ data class SlotUiItem(
 
 data class DaySummary(
     val date: LocalDate,
-    val items: List<SlotUiItem>
+    val items: List<SlotUiItem>,
+    val totalSlotsCount: Int = items.size,
+    val doneSlotsCount: Int = items.count { it.state == SlotState.DONE }
 )
 
 data class WeekSummary(
@@ -46,7 +49,7 @@ class LookAtMeViewModel(
     private val prefs = context.getSharedPreferences("lookatme_prefs", Context.MODE_PRIVATE)
 
     val isHijriMode          = MutableStateFlow(prefs.getBoolean("is_hijri", false))
-    val isDarkMode           = MutableStateFlow(prefs.getBoolean("is_dark", true))
+    val isDarkMode           = MutableStateFlow(true)
     val notificationsEnabled = MutableStateFlow(prefs.getBoolean("notif_enabled", true))
 
     fun toggleHijriMode(enabled: Boolean) {
@@ -55,8 +58,8 @@ class LookAtMeViewModel(
     }
 
     fun toggleDarkMode(enabled: Boolean) {
-        isDarkMode.value = enabled
-        prefs.edit().putBoolean("is_dark", enabled).apply()
+        // Permanently dark mode
+        isDarkMode.value = true
     }
 
     fun toggleNotifications(enabled: Boolean) {
@@ -89,18 +92,58 @@ class LookAtMeViewModel(
         buildSlotUiItems(slots, completions, LocalDate.now())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val visibleSlotsForSelected: StateFlow<List<SlotUiItem>> = slotsForSelected.map { items ->
-        val date = selectedDate.value
+    val visibleSlotsForSelected: StateFlow<List<SlotUiItem>> = combine(
+        slotsForSelected,
+        selectedDate,
+        _timeTick
+    ) { slots, date, _ ->
         val today = LocalDate.now()
-        if (date == today) {
-            val now = LocalTime.now()
-            items.filter { item ->
-                LocalTime.parse(item.slot.startTime) <= now
+        val now = LocalTime.now()
+        when {
+            date < today -> slots
+            date == today -> slots.filter { item ->
+                item.completion != null || LocalTime.parse(item.slot.endTime) <= now
             }
-        } else {
-            items
+            else -> emptyList() // Future days: events only appear when their day and end time arrive
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allActiveSlots: StateFlow<List<SlotEntity>> = repo.allActiveSlots()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allCategories: StateFlow<List<CategoryEntity>> = repo.allCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_CATEGORIES)
+
+    val cachedSummaries = MutableStateFlow<List<WeekSummary>>(emptyList())
+
+    init {
+        viewModelScope.launch {
+            repo.clearDefaultCategories()
+            repo.getAllCategoriesOnce()
+        }
+        viewModelScope.launch {
+            combine(
+                repo.allActiveSlots(),
+                repo.allCompletions(),
+                _timeTick
+            ) { _, _, _ -> }.collect {
+                refreshSummaries()
+            }
+        }
+    }
+
+    fun addCategory(id: String, name: String, iconName: String, colorHex: String, bgStyle: String = "default") {
+        viewModelScope.launch {
+            repo.insertCategory(CategoryEntity(id, name, iconName, colorHex, bgStyle))
+        }
+    }
+
+    fun refreshSummaries() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val s = weekSummaries(LocalDate.of(2026, 9, 20))
+            cachedSummaries.value = s
+        }
+    }
 
     fun selectDate(date: LocalDate) {
         selectedDate.value = date
@@ -114,17 +157,22 @@ class LookAtMeViewModel(
         viewModelScope.launch {
             repo.upsertCompletion(slotId, date, status, note)
             NotificationScheduler.cancelSlotNotification(context, slotId, date)
+            refreshSummaries()
         }
     }
 
     fun unmarkSlot(slotId: Long, date: LocalDate) {
-        viewModelScope.launch { repo.deleteCompletion(slotId, date) }
+        viewModelScope.launch {
+            repo.deleteCompletion(slotId, date)
+            refreshSummaries()
+        }
     }
 
     fun addSlot(
         title: String, emoji: String, subtitle: String,
         category: String, startTime: String, endTime: String,
-        dayOfWeek: Int, specificDate: LocalDate?, isRecurring: Boolean
+        dayOfWeek: Int, specificDate: LocalDate?, isRecurring: Boolean,
+        colorHex: String = "", bgStyle: String = "default"
     ) {
         viewModelScope.launch {
             val slot = SlotEntity(
@@ -132,7 +180,9 @@ class LookAtMeViewModel(
                 category = category, startTime = startTime, endTime = endTime,
                 dayOfWeek = if (isRecurring) dayOfWeek else -1,
                 specificDate = specificDate?.toISO() ?: "",
-                isRecurring = isRecurring
+                isRecurring = isRecurring,
+                colorHex = colorHex,
+                bgStyle = bgStyle
             )
             val id = repo.insertSlot(slot)
             val targetDate = specificDate ?: LocalDate.now()
@@ -140,15 +190,22 @@ class LookAtMeViewModel(
                 val inserted = slot.copy(id = id)
                 NotificationScheduler.scheduleSlotEndNotification(context, inserted, targetDate)
             }
+            refreshSummaries()
         }
     }
 
     fun updateSlot(slot: SlotEntity) {
-        viewModelScope.launch { repo.updateSlot(slot) }
+        viewModelScope.launch {
+            repo.updateSlot(slot)
+            refreshSummaries()
+        }
     }
 
     fun deleteSlot(id: Long) {
-        viewModelScope.launch { repo.deleteSlot(id) }
+        viewModelScope.launch {
+            repo.deleteSlot(id)
+            refreshSummaries()
+        }
     }
 
     fun resetToDefaults() {
@@ -181,12 +238,30 @@ class LookAtMeViewModel(
                 if (d < appStart) continue
                 val slots = repo.slotsForDateOnce(d)
                 val dayCompletions = compMap[d.toISO()] ?: emptyList()
-                total += slots.size
                 val uiItems = buildSlotUiItems(slots, dayCompletions, d)
-                done   += uiItems.count { it.state == SlotState.DONE }
-                missed += uiItems.count { it.state == SlotState.MISSED }
-                if (slots.isNotEmpty()) {
-                    dayDetails.add(DaySummary(d, uiItems))
+                val dayTotal = slots.size
+                val dayDone = uiItems.count { it.state == SlotState.DONE }
+
+                if (d < today) {
+                    total += slots.size
+                    done   += dayDone
+                    missed += uiItems.count { it.state == SlotState.MISSED }
+                    if (uiItems.isNotEmpty()) {
+                        dayDetails.add(DaySummary(d, uiItems, dayTotal, dayDone))
+                    }
+                } else {
+                    // Bugün: Henüz bitiş saati gelmemiş ve tamamlanmamış etkinlikler
+                    // haftalık dökümde listelenmesin ve başarı oranını haksız yere düşürmesin.
+                    val now = LocalTime.now()
+                    val actionableToday = uiItems.filter {
+                        it.completion != null || LocalTime.parse(it.slot.endTime) <= now
+                    }
+                    total += actionableToday.size
+                    done   += actionableToday.count { it.state == SlotState.DONE }
+                    missed += actionableToday.count { it.state == SlotState.MISSED }
+                    if (actionableToday.isNotEmpty()) {
+                        dayDetails.add(DaySummary(d, actionableToday, dayTotal, dayDone))
+                    }
                 }
             }
             summaries.add(WeekSummary(weekStart, weekEnd, total, done, missed, dayDetails))

@@ -1,5 +1,7 @@
 package com.example.lookatme.ui
 
+import com.example.lookatme.data.*
+import android.graphics.BitmapFactory
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -14,12 +16,17 @@ import androidx.compose.ui.draw.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
+import java.io.File
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.roundToInt
 
 // ─────────────────────────────────────────────────────────────────
 //  CALENDAR SCREEN
@@ -43,12 +50,26 @@ fun CalendarScreen(
 
     val today = LocalDate.now()
     val appStart = LocalDate.of(2026, 9, 20)
-    var startDate by remember { mutableStateOf(if (selectedDate < today) today else selectedDate) }
+    var startDate by remember { mutableStateOf(selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())) }
     var markingItem  by remember { mutableStateOf<SlotUiItem?>(null) }
     var editingItem  by remember { mutableStateOf<SlotUiItem?>(null) }
     var showAddSheet by remember { mutableStateOf(false) }
-    var summaries by remember { mutableStateOf<List<WeekSummary>>(emptyList()) }
-    var expandedWeekIndex by remember { mutableStateOf<Int?>(null) }
+    val summaries by viewModel.cachedSummaries.collectAsState()
+    val categories by viewModel.allCategories.collectAsState()
+
+    val currentWeekSum = summaries.firstOrNull { s ->
+        !startDate.isBefore(s.start) && !startDate.isAfter(s.end)
+    }
+
+    val dayProgressMap = remember(summaries, startDate) {
+        val map = mutableMapOf<LocalDate, Float>()
+        currentWeekSum?.dayDetails?.forEach { daySum ->
+            map[daySum.date] = if (daySum.totalSlotsCount > 0) {
+                daySum.doneSlotsCount.toFloat() / daySum.totalSlotsCount
+            } else 0f
+        }
+        map
+    }
 
     // Open add sheet when triggered from TopBar pencil icon
     LaunchedEffect(triggerAddSheet) {
@@ -58,37 +79,32 @@ fun CalendarScreen(
         }
     }
 
-    // Reload summaries whenever slots/completions change (fixes stale weekly summary bug)
-    LaunchedEffect(allSlots) { summaries = viewModel.weekSummaries(appStart) }
-
     LaunchedEffect(selectedDate) {
+        val weekMon = selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())
         if (selectedDate < startDate || selectedDate > startDate.plusDays(6)) {
-            startDate = if (selectedDate < today) today else selectedDate
+            startDate = weekMon
         }
     }
 
     Column(
         modifier = Modifier.fillMaxSize().background(colors.bgApp)
     ) {
-        // Day navigation header starting from Today
+        // Day navigation header - allows navigating to previous and next weeks
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val canGoBack = startDate > today
             IconButton(
                 onClick = {
                     val prev = startDate.minusDays(7)
-                    val target = if (prev < today) today else prev
-                    startDate = target
-                    viewModel.selectDate(target)
-                },
-                enabled = canGoBack
+                    startDate = prev
+                    viewModel.selectDate(prev)
+                }
             ) {
                 Text(
                     "‹",
                     fontSize = 22.sp,
-                    color = if (canGoBack) colors.text2 else colors.text3.copy(alpha = 0.3f),
+                    color = colors.text2,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -98,24 +114,27 @@ fun CalendarScreen(
                     "${startDate.plusDays(6).dayOfMonth} ${TR_MONTHS[startDate.plusDays(6).monthValue-1]}",
                     fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1
                 )
+                val isCurrentWeek = (startDate <= today && today <= startDate.plusDays(6))
                 Text(
-                    if (startDate == today) "Bugünden İtibaren" else "${startDate.dayOfMonth} ${TR_MONTHS[startDate.monthValue-1]}",
+                    if (isCurrentWeek) "Bu Hafta" else "${startDate.dayOfMonth} ${TR_MONTHS[startDate.monthValue-1]} Haftası",
                     fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.text3
                 )
             }
             IconButton(onClick = {
-                startDate = startDate.plusDays(7)
-                viewModel.selectDate(startDate)
+                val next = startDate.plusDays(7)
+                startDate = next
+                viewModel.selectDate(next)
             }) {
                 Text("›", fontSize = 22.sp, color = colors.text2, fontWeight = FontWeight.Bold)
             }
         }
 
-        // Day strip starting from Today
+        // Day strip with animated water fill
         Box(modifier = Modifier.padding(horizontal = 14.dp)) {
             DayStrip(
                 weekStart = startDate,
                 selectedDate = selectedDate,
+                dayProgress = dayProgressMap,
                 isDark = isDark,
                 onDateSelected = { viewModel.selectDate(it) }
             )
@@ -133,10 +152,29 @@ fun CalendarScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(selectedDate.dayNameTR(), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1)
-            Text(selectedDate.formatCustom(isHijri), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.text3)
+            Text(selectedDate.formatCustom(false), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.text3)
+            if (selectedDate == today) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFF97316).copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("BUGÜN", fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF97316))
+                }
+            } else if (selectedDate == today.minusDays(1)) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF4F8EF7).copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("DÜN", fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF4F8EF7))
+                }
+            }
         }
 
-        // Slot list
+        // Slot list - shows actionable slots for today (future tasks hidden until their end time arrives)
         val displaySlots = if (isEditMode) allSlots else visibleSlots
 
         LazyColumn(
@@ -144,87 +182,83 @@ fun CalendarScreen(
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 90.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // ── Günlük İlerleme (above tasks) ──
-            if (selectedDate <= today && (displaySlots.isNotEmpty() || allSlots.isNotEmpty())) {
-                item {
-                    ProgressCard(items = if (isEditMode) allSlots else allSlots, isDark = isDark)
-                }
-            }
 
-            when {
-                // Future Date Notification Card in Action Mode
-                !isEditMode && selectedDate > today -> {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = colors.bgCard),
-                            border = BorderStroke(1.dp, Color(0xFF4F8EF7).copy(alpha = 0.3f))
+            // Future Date Info Banner in Action Mode
+            if (!isEditMode && selectedDate > today && displaySlots.isNotEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = colors.bgCard),
+                        border = BorderStroke(1.dp, Color(0xFF4F8EF7).copy(alpha = 0.25f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier.size(48.dp).clip(CircleShape)
-                                        .background(Color(0xFF4F8EF7).copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("⏰", fontSize = 22.sp)
-                                }
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    "${selectedDate.dayOfMonth} ${TR_MONTHS[selectedDate.monthValue-1]} Etkinlikleri",
-                                    fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    "Bu günün etkinlikleri günü ve saati gelince otomatik olarak aksiyon listenizde görüntülenecektir.",
-                                    fontSize = 12.sp, color = colors.text2, textAlign = TextAlign.Center
-                                )
-                                Spacer(Modifier.height(14.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(colors.bgCard2)
-                                        .border(1.dp, colors.border, RoundedCornerShape(20.dp))
-                                        .clickable { onToggleEditMode() }
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                                ) {
-                                    Text("✏️ Planı Düzenle / Yeni Ekle", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4F8EF7))
-                                }
+                            Text("⏰", fontSize = 18.sp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Gelecek Gün Planı", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.text1)
+                                Text("Günü ve saati geldiğinde otomatik aksiyona dönüşecektir.", fontSize = 10.sp, color = colors.text3)
+                            }
+                            TextButton(onClick = { onToggleEditMode() }) {
+                                Text("Düzenle", fontSize = 11.sp, color = Color(0xFF4F8EF7), fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
+            }
 
-                displaySlots.isEmpty() && allSlots.isEmpty() ->
-                    item { EmptyState("📭", "Bu gün etkinlik yok", "+ ile etkinlik ekleyebilirsin", colors) }
-
-                displaySlots.isEmpty() ->
-                    item { EmptyState("⏳", "Henüz saati gelen etkinlik yok", "Etkinlikler saatleri gelince otomatik görünecek", colors) }
-
-                else -> {
-                    items(displaySlots, key = { it.slot.id }) { item ->
-                        SlotCard(
-                            item = item,
-                            isDark = isDark,
-                            onClick = { if (isEditMode) editingItem = item else markingItem = item }
+            if (displaySlots.isEmpty()) {
+                item {
+                    if (allSlots.isEmpty()) {
+                        EmptyState(
+                            "📭",
+                            if (selectedDate < today) "Bu güne ait etkinlik bulunamadı" else "Bu gün etkinlik yok",
+                            "Haftalık programdan ekleyebilirsin",
+                            colors
+                        )
+                    } else {
+                        EmptyState(
+                            "⏳",
+                            "Henüz bitiş saati gelen etkinlik yok",
+                            "Etkinlikler bitiş saatleri geldiğinde otomatik olarak görünecektir",
+                            colors
                         )
                     }
-                    val remaining = allSlots.size - displaySlots.size
-                    if (!isEditMode && remaining > 0 && selectedDate == today) {
-                        item {
-                            Box(
-                                modifier = Modifier.fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(colors.bgCard)
-                                    .border(1.dp, colors.border, RoundedCornerShape(12.dp))
-                                    .padding(12.dp),
-                                contentAlignment = Alignment.Center
+                }
+            } else {
+                items(displaySlots, key = { it.slot.id }) { item ->
+                    SlotCard(
+                        item = item,
+                        isDark = isDark,
+                        categories = categories,
+                        onClick = { if (isEditMode) editingItem = item else markingItem = item }
+                    )
+                }
+
+                // If today and there are future tasks whose end time hasn't arrived yet
+                val remainingToday = if (selectedDate == today && !isEditMode) allSlots.size - displaySlots.size else 0
+                if (remainingToday > 0) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = colors.bgCard),
+                            border = BorderStroke(1.dp, colors.border)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text("⏰ $remaining etkinlik daha saati gelince aksiyon listenize eklenecek",
-                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.text3)
+                                Text("⏰", fontSize = 16.sp)
+                                Text(
+                                    "$remainingToday etkinlik daha bitiş saati gelince listenize eklenecektir.",
+                                    fontSize = 11.sp,
+                                    color = colors.text2
+                                )
                             }
                         }
                     }
@@ -242,7 +276,6 @@ fun CalendarScreen(
                 }
                 item {
                     val summary = selectedWeekSummary
-                    val isExpanded = expandedWeekIndex == 0
                     val pctColor = when {
                         summary.pct >= 70 -> Color(0xFF16A34A)
                         summary.pct >= 40 -> Color(0xFFCA8A04)
@@ -252,27 +285,79 @@ fun CalendarScreen(
                     val trDays = listOf("Pt", "Sa", "Çr", "Pe", "Cu", "Ct", "Pa")
 
                     Card(
-                        onClick = { expandedWeekIndex = if (isExpanded) null else 0 },
-                        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = colors.bgCard),
                         border = BorderStroke(1.dp, colors.border)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        val weekLabel = "${summary.start.dayOfMonth} ${TR_MONTHS[summary.start.monthValue-1]} – ${summary.end.dayOfMonth} ${TR_MONTHS[summary.end.monthValue-1]}"
-                                        Text(weekLabel, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1)
-                                        Text(if (isExpanded) "▲" else "▼", fontSize = 10.sp, color = colors.text3)
-                                    }
+                                    val weekLabel = "${summary.start.dayOfMonth} ${TR_MONTHS[summary.start.monthValue-1]} – ${summary.end.dayOfMonth} ${TR_MONTHS[summary.end.monthValue-1]}"
+                                    Text(weekLabel, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1)
                                     Text(
                                         "${summary.start.formatCustom(isHijri)} – ${summary.end.formatCustom(isHijri)}",
                                         fontSize = 11.sp, color = colors.text3
                                     )
                                 }
-                                Text("%${summary.pct}", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = pctColor)
+
+                                // ── Lüks Cam Hap (Glass Pill) Rozet ──
+                                val badgeBg = when {
+                                    summary.pct >= 70 -> Color(0xFF16A34A).copy(alpha = 0.16f)
+                                    summary.pct >= 40 -> Color(0xFFCA8A04).copy(alpha = 0.16f)
+                                    else              -> Color(0xFFDC2626).copy(alpha = 0.16f)
+                                }
+                                val badgeBorder = when {
+                                    summary.pct >= 70 -> Color(0xFF16A34A).copy(alpha = 0.45f)
+                                    summary.pct >= 40 -> Color(0xFFCA8A04).copy(alpha = 0.45f)
+                                    else              -> Color(0xFFDC2626).copy(alpha = 0.45f)
+                                }
+                                val badgeIcon = when {
+                                    summary.pct >= 85 -> "🏆"
+                                    summary.pct >= 70 -> "✨"
+                                    summary.pct >= 40 -> "⚡"
+                                    else              -> "🎯"
+                                }
+                                val statusText = when {
+                                    summary.pct >= 85 -> "Mükemmel"
+                                    summary.pct >= 70 -> "Başarılı"
+                                    summary.pct >= 40 -> "İyi"
+                                    summary.pct > 0   -> "Devam"
+                                    else              -> "Başlangıç"
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(badgeBg)
+                                        .border(1.dp, badgeBorder, RoundedCornerShape(20.dp))
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Text(badgeIcon, fontSize = 11.sp)
+                                        Text(
+                                            text = "%${summary.pct}",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = pctColor
+                                        )
+                                        Text(
+                                            text = statusText,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = pctColor.copy(alpha = 0.9f)
+                                        )
+                                    }
+                                }
                             }
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(12.dp))
 
                             // Weekly Mini Heatmap Tile Row — Turkish day initials
                             Row(
@@ -308,70 +393,29 @@ fun CalendarScreen(
                                 }
                             }
 
-                            Spacer(Modifier.height(10.dp))
-                            LinearProgressIndicator(
-                                progress = { animPct },
-                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(6.dp)),
-                                color = pctColor, trackColor = colors.bgCard2,
-                                strokeCap = StrokeCap.Round
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                WeekTag("✓ ${summary.done} Yapıldı", Color(0xFF16A34A))
-                                WeekTag("✕ ${summary.missed} Yapılmadı", Color(0xFFDC2626))
-                                WeekTag("○ ${summary.total - summary.done - summary.missed} Bekliyor", colors.text3)
-                            }
-
-                            // Day-by-day expandable detail breakdown
-                            AnimatedVisibility(visible = isExpanded) {
-                                Column(
-                                    modifier = Modifier.padding(top = 16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    HorizontalDivider(color = colors.border)
-                                    Text("GÜN GÜN DÖKÜM", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, color = colors.text3)
-
-                                    summary.dayDetails.forEach { daySum ->
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Text(
-                                                "${daySum.date.dayNameTR()} • ${daySum.date.formatCustom(isHijri)}",
-                                                fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF4F8EF7)
+                            Spacer(Modifier.height(12.dp))
+                            // Modern dual-color gradient progress bar
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(7.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(colors.bgCard2)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(animPct.coerceIn(0f, 1f))
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(
+                                                    Color(0xFF4F8EF7),
+                                                    pctColor
+                                                )
                                             )
-                                            daySum.items.forEach { uiItem ->
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                                        .background(colors.bgCard2).padding(horizontal = 10.dp, vertical = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                ) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                        LucideIcon(title = uiItem.slot.title, category = uiItem.slot.category, tint = categoryAccent(uiItem.slot.category), modifier = Modifier.size(18.dp))
-                                                        Column {
-                                                            Text(uiItem.slot.title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.text1)
-                                                            Text("${uiItem.slot.startTime} – ${uiItem.slot.endTime}", fontSize = 10.sp, color = colors.text3)
-                                                            if (uiItem.completion?.note?.isNotBlank() == true) {
-                                                                Text("💬 ${uiItem.completion.note}", fontSize = 10.sp, color = colors.text2)
-                                                            }
-                                                        }
-                                                    }
-                                                    Text(
-                                                        text = when (uiItem.state) {
-                                                            SlotState.DONE   -> "✓ Yapıldı"
-                                                            SlotState.MISSED -> "✕ Yapılmadı"
-                                                            else             -> "○ Bekliyor"
-                                                        },
-                                                        fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
-                                                        color = when (uiItem.state) {
-                                                            SlotState.DONE   -> Color(0xFF16A34A)
-                                                            SlotState.MISSED -> Color(0xFFDC2626)
-                                                            else             -> colors.text3
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                        )
+                                )
                             }
                         }
                     }
@@ -387,23 +431,25 @@ fun CalendarScreen(
     }
     editingItem?.let { item ->
         EditSlotSheet(
-            existingSlot = item, defaultDate = selectedDate, isDark = isDark,
+            existingSlot = item, defaultDate = selectedDate, categories = categories, isDark = isDark,
             onDismiss = { editingItem = null },
-            onSave = { title, emoji, sub, cat, start, end, recurring ->
+            onAddCategory = { id, name, icon, colorHex, bgStyle -> viewModel.addCategory(id, name, icon, colorHex, bgStyle) },
+            onSave = { title, emoji, sub, cat, start, end, recurring, colorHex, bgStyle ->
                 viewModel.updateSlot(item.slot.copy(title=title, emoji=emoji, subtitle=sub,
-                    category=cat, startTime=start, endTime=end, isRecurring=recurring))
+                    category=cat, startTime=start, endTime=end, isRecurring=recurring, colorHex=colorHex, bgStyle=bgStyle))
             },
             onDelete = { viewModel.deleteSlot(item.slot.id) }
         )
     }
     if (showAddSheet) {
         EditSlotSheet(
-            existingSlot = null, defaultDate = selectedDate, isDark = isDark,
+            existingSlot = null, defaultDate = selectedDate, categories = categories, isDark = isDark,
             onDismiss = { showAddSheet = false },
-            onSave = { title, emoji, sub, cat, start, end, recurring ->
+            onAddCategory = { id, name, icon, colorHex, bgStyle -> viewModel.addCategory(id, name, icon, colorHex, bgStyle) },
+            onSave = { title, emoji, sub, cat, start, end, recurring, colorHex, bgStyle ->
                 val dow = selectedDate.dayOfWeek.value - 1
                 viewModel.addSlot(title, emoji, sub, cat, start, end, dow,
-                    if (!recurring) selectedDate else null, recurring)
+                    if (!recurring) selectedDate else null, recurring, colorHex, bgStyle)
             }
         )
     }
@@ -420,6 +466,7 @@ fun TodayScreen(viewModel: LookAtMeViewModel) {
     val isDark     by viewModel.isDarkMode.collectAsState()
     val colors     = if (isDark) DarkThemeColors else LightThemeColors
     val todaySlots by viewModel.todaySlots.collectAsState()
+    val categories by viewModel.allCategories.collectAsState()
     var markingItem by remember { mutableStateOf<SlotUiItem?>(null) }
 
     LazyColumn(
@@ -446,7 +493,7 @@ fun TodayScreen(viewModel: LookAtMeViewModel) {
                 letterSpacing = 1.sp, color = colors.text3)
         }
         if (todaySlots.isEmpty()) {
-            item { EmptyState("☀️", "Bugün etkinlik yok", "Takvim sekmesinden etkinlik ekle", colors) }
+            item { EmptyState("☀️", "Bugün etkinlik yok", "Haftalık programdan ekleyebilirsin", colors) }
         } else {
             items(todaySlots, key = { it.slot.id }) { item ->
                 Row(
@@ -472,7 +519,7 @@ fun TodayScreen(viewModel: LookAtMeViewModel) {
                         Box(Modifier.width(2.dp).height(28.dp).background(colors.bgCard2))
                     }
                     Box(modifier = Modifier.weight(1f)) {
-                        SlotCard(item = item, isDark = isDark, onClick = { markingItem = item })
+                        SlotCard(item = item, isDark = isDark, categories = categories, onClick = { markingItem = item })
                     }
                 }
             }
@@ -493,15 +540,12 @@ fun TodayScreen(viewModel: LookAtMeViewModel) {
 @Composable
 fun HistoryScreen(viewModel: LookAtMeViewModel) {
     val appStart = LocalDate.of(2026, 9, 20)
-    val isHijri  by viewModel.isHijriMode.collectAsState()
     val isDark   by viewModel.isDarkMode.collectAsState()
     val colors   = if (isDark) DarkThemeColors else LightThemeColors
 
     var selectedYear by remember { mutableStateOf(2026) }
-    var summaries by remember { mutableStateOf<List<WeekSummary>>(emptyList()) }
+    val summaries by viewModel.cachedSummaries.collectAsState()
     var expandedWeekIndex by remember { mutableStateOf<Int?>(null) }
-
-    LaunchedEffect(Unit) { summaries = viewModel.weekSummaries(appStart) }
 
     // Aggregate statistics across all summaries
     val totalDone   = summaries.sumOf { it.done }
@@ -560,6 +604,12 @@ fun HistoryScreen(viewModel: LookAtMeViewModel) {
     val dayOfWeekData = remember(summaries) { calculateDayOfWeekData(summaries) }
 
     // Category breakdown calculation
+    val categories by viewModel.allCategories.collectAsState()
+    val categoryMap = remember(categories) { categories.associate { it.id to it.name } }
+    fun getCatName(id: String): String = categoryMap[id] ?: CategoryLabels[id] ?: id
+    fun getCatIcon(id: String): String = categories.firstOrNull { it.id == id }?.iconName ?: id
+    fun getCatColor(id: String): Color = categories.firstOrNull { it.id == id }?.let { parseColorHex(it.colorHex) } ?: categoryAccent(id)
+
     val catStats = remember(summaries) {
         val allItems = summaries.flatMap { it.dayDetails }.flatMap { it.items }
         allItems.groupBy { it.slot.category }.mapValues { (_, items) ->
@@ -605,7 +655,7 @@ fun HistoryScreen(viewModel: LookAtMeViewModel) {
                     DashboardStatCard(
                         iconName = "target",
                         value = "%$overallPct",
-                        label = "Haftalık Oran",
+                        label = "Başarı Oranı",
                         sub = "$totalDone/$totalSlots Yapıldı",
                         accentColor = Color(0xFF16A34A),
                         colors = colors,
@@ -625,11 +675,11 @@ fun HistoryScreen(viewModel: LookAtMeViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // 4: Peak Category Card
                     DashboardStatCard(
-                        iconName = "award",
-                        value = CategoryLabels[bestCat] ?: bestCat,
+                        iconName = getCatIcon(bestCat),
+                        value = getCatName(bestCat),
                         label = "Zirve Kategori",
                         sub = "%${catStats[bestCat]?.third ?: 0} Başarı",
-                        accentColor = Color(0xFFA855F7),
+                        accentColor = getCatColor(bestCat),
                         colors = colors,
                         modifier = Modifier.weight(1f)
                     )
@@ -701,8 +751,9 @@ fun HistoryScreen(viewModel: LookAtMeViewModel) {
                     } else {
                         sortedCats.forEach { (cat, stats) ->
                             val (doneCount, totalCount, pct) = stats
-                            val accent = categoryAccent(cat)
-                            val label = CategoryLabels[cat] ?: cat
+                            val accent = getCatColor(cat)
+                            val label = getCatName(cat)
+                            val icon = getCatIcon(cat)
                             val animPct by animateFloatAsState(pct / 100f, tween(600), label = "cat_$cat")
 
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -712,7 +763,7 @@ fun HistoryScreen(viewModel: LookAtMeViewModel) {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        LucideIcon(category = cat, tint = accent, modifier = Modifier.size(16.dp))
+                                        LucideIcon(iconName = icon, category = cat, tint = accent, modifier = Modifier.size(16.dp))
                                         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = colors.text1)
                                     }
                                     Text("%$pct ($doneCount/$totalCount)", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = accent)
@@ -801,6 +852,7 @@ fun YearlyHeatmapMatrixCard(
     val firstDayOfYear = LocalDate.of(year, 1, 1)
     val jan1Mon = firstDayOfYear.minusDays((firstDayOfYear.dayOfWeek.value - 1).toLong())
     val monthsTR = listOf("Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara")
+    var selectedTileDate by remember { mutableStateOf<LocalDate?>(null) }
 
     // Calculate initial week index of current date to auto-scroll to current month
     val currentWeekIdx = remember(today, year) {
@@ -837,46 +889,151 @@ fun YearlyHeatmapMatrixCard(
 
             Spacer(Modifier.height(14.dp))
 
-            LazyRow(
-                state = lazyListState,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
-            ) {
-                items(52) { weekIdx ->
-                    val weekStart = jan1Mon.plusWeeks(weekIdx.toLong())
-                    val monthLabel = if (weekStart.dayOfMonth <= 7) monthsTR[weekStart.monthValue - 1] else ""
+            Row(modifier = Modifier.fillMaxWidth()) {
+                // Day of week labels on left
+                Column(
+                    modifier = Modifier.padding(end = 5.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Spacer(Modifier.height(20.dp)) // Aligns with month label height
+                    listOf("Pt", "Sa", "Çr", "Pe", "Cu", "Ct", "Pa").forEach { dName ->
+                        Box(
+                            modifier = Modifier.height(18.dp),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            Text(dName, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = colors.text3)
+                        }
+                        Spacer(Modifier.height(3.dp))
+                    }
+                }
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = monthLabel,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colors.text3,
-                            modifier = Modifier.height(16.dp)
-                        )
-                        Spacer(Modifier.height(8.dp)) // Added spacing so text doesn't touch tiles!
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            for (dayIdx in 0..6) {
-                                val date = weekStart.plusDays(dayIdx.toLong())
-                                val daySum = dayMap[date]
-                                val doneCount = daySum?.items?.count { it.state == SlotState.DONE } ?: 0
-                                val totalCount = daySum?.items?.size ?: 0
-                                val pct = if (totalCount > 0) (doneCount * 100 / totalCount) else 0
+                // LazyRow of 52 weeks
+                LazyRow(
+                    state = lazyListState,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    contentPadding = PaddingValues(horizontal = 2.dp)
+                ) {
+                    items(52) { weekIdx ->
+                        val weekStart = jan1Mon.plusWeeks(weekIdx.toLong())
+                        val firstOfMonth = (0..6).map { weekStart.plusDays(it.toLong()) }
+                            .firstOrNull { it.dayOfMonth == 1 && it.year == year }
+                        val monthLabel = if (firstOfMonth != null) monthsTR[firstOfMonth.monthValue - 1] else ""
 
-                                // Distinct tile colors for Past vs Completed vs Future
-                                val tileColor = when {
-                                    date > today -> colors.bgCard2.copy(alpha = 0.35f) // Faded future day
-                                    doneCount > 0 -> Color(0xFFA855F7) // Vibrant active purple
-                                    else -> colors.bgCard2 // Past empty day (Dark tile)
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(11.dp)
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(tileColor)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                modifier = Modifier.height(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = monthLabel,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (monthLabel.isNotBlank()) Color(0xFF4F8EF7) else colors.text3
                                 )
                             }
+                            Spacer(Modifier.height(4.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                for (dayIdx in 0..6) {
+                                    val date = weekStart.plusDays(dayIdx.toLong())
+                                    val daySum = dayMap[date]
+                                    val doneCount = daySum?.items?.count { it.state == SlotState.DONE } ?: 0
+                                    val isCurrentDay = date == today
+                                    val isSelected = date == selectedTileDate
+
+                                    val tileColor = when {
+                                        date > today -> colors.bgCard2.copy(alpha = 0.3f)
+                                        doneCount > 0 -> Color(0xFFA855F7)
+                                        else -> colors.bgCard2
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(tileColor)
+                                            .border(
+                                                width = if (isCurrentDay) 1.5.dp else if (isSelected) 1.5.dp else 0.5.dp,
+                                                color = when {
+                                                    isCurrentDay -> Color(0xFFF97316)
+                                                    isSelected -> Color(0xFF4F8EF7)
+                                                    else -> colors.border.copy(alpha = 0.3f)
+                                                },
+                                                shape = RoundedCornerShape(4.dp)
+                                            )
+                                            .clickable {
+                                                selectedTileDate = if (selectedTileDate == date) null else date
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (date.year == year) {
+                                            Text(
+                                                text = "${date.dayOfMonth}",
+                                                fontSize = 7.5.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (doneCount > 0) Color.White else colors.text3.copy(alpha = 0.8f),
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Tile detail card on tap
+            selectedTileDate?.let { date ->
+                val daySum = dayMap[date]
+                val doneCount = daySum?.items?.count { it.state == SlotState.DONE } ?: 0
+                val totalCount = daySum?.items?.size ?: 0
+                val pct = if (totalCount > 0) (doneCount * 100 / totalCount) else 0
+
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.bgCard2),
+                    border = BorderStroke(1.dp, colors.border)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    "${date.dayOfMonth} ${TR_MONTHS[date.monthValue - 1]} ${date.year}",
+                                    fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1
+                                )
+                                Text("• ${date.dayNameTR()}", fontSize = 12.sp, color = colors.text3)
+                            }
+                            if (date == today) {
+                                Text("Bugün", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF97316))
+                            }
+                        }
+                        if (totalCount > 0) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "$totalCount etkinlikten $doneCount tanesi tamamlandı",
+                                    fontSize = 11.sp, color = colors.text2
+                                )
+                                Text(
+                                    "%$pct",
+                                    fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
+                                    color = if (pct >= 70) Color(0xFF16A34A) else Color(0xFFF97316)
+                                )
+                            }
+                        } else {
+                            Text(
+                                if (date > today) "Gelecek gün" else "Kayıtlı etkinlik bulunmuyor",
+                                fontSize = 11.sp, color = colors.text3
+                            )
                         }
                     }
                 }
@@ -1041,13 +1198,6 @@ fun MonthlyCompletionsChartCard(
             ) {
                 Column {
                     Text("Tamamlanmalar / Aylık", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = colors.text1)
-                    if (selectedIndex != null && selectedIndex!! in monthlyData.indices) {
-                        val sel = monthlyData[selectedIndex!!]
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("${sel.first}: ${sel.second} Tamamlandı", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFA855F7))
-                            Text("/ ${sel.third} Toplam", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4F8EF7))
-                        }
-                    }
                 }
                 Box(
                     modifier = Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFA855F7).copy(alpha = 0.15f)),
@@ -1076,7 +1226,20 @@ fun MonthlyCompletionsChartCard(
             val blueColor = Color(0xFF4F8EF7)
 
             Box(
-                modifier = Modifier.fillMaxWidth().height(140.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(145.dp)
+                    .pointerInput(monthlyData) {
+                        detectTapGestures { offset ->
+                            if (monthlyData.isNotEmpty()) {
+                                val w = size.width
+                                val lastIdx = (monthlyData.size - 1).coerceAtLeast(1)
+                                val fraction = (offset.x / w).coerceIn(0f, 1f)
+                                val idx = (fraction * lastIdx).roundToInt().coerceIn(0, monthlyData.size - 1)
+                                selectedIndex = idx
+                            }
+                        }
+                    }
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val w = size.width
@@ -1097,6 +1260,18 @@ fun MonthlyCompletionsChartCard(
                     }
 
                     if (monthlyData.isNotEmpty()) {
+                        // ─── Guideline for selected month ───
+                        if (selectedIndex != null && selectedIndex!! in monthlyData.indices) {
+                            val selX = (selectedIndex!!.toFloat() / lastIdx) * w
+                            drawLine(
+                                color = purpleColor.copy(alpha = 0.45f),
+                                start = Offset(selX, 0f),
+                                end = Offset(selX, h),
+                                strokeWidth = 1.5.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                            )
+                        }
+
                         // ─── Total (blue) line ───
                         val totalPoints = monthlyData.mapIndexed { idx, tri ->
                             val x = (idx.toFloat() / lastIdx) * w
@@ -1145,14 +1320,46 @@ fun MonthlyCompletionsChartCard(
                         donePoints.forEachIndexed { idx, pt ->
                             val isSelected = selectedIndex == idx
                             val radius = if (isSelected) 7.dp.toPx() else 4.dp.toPx()
+                            if (isSelected) {
+                                drawCircle(color = purpleColor.copy(alpha = 0.25f), radius = 13.dp.toPx(), center = pt)
+                            }
                             drawCircle(color = purpleColor, radius = radius, center = pt)
                             drawCircle(color = if (isSelected) Color.White else purpleColor.copy(alpha = 0.3f), radius = radius / 2, center = pt)
                         }
                         totalPoints.forEachIndexed { idx, pt ->
                             val isSelected = selectedIndex == idx
                             val radius = if (isSelected) 6.dp.toPx() else 3.dp.toPx()
+                            if (isSelected) {
+                                drawCircle(color = blueColor.copy(alpha = 0.22f), radius = 11.dp.toPx(), center = pt)
+                            }
                             drawCircle(color = blueColor, radius = radius, center = pt)
                             drawCircle(color = Color.White, radius = radius / 2f, center = pt)
+                        }
+                    }
+                }
+
+                // ── Floating Tooltip Badge on Chart Tap ──
+                if (selectedIndex != null && selectedIndex!! in monthlyData.indices) {
+                    val sel = monthlyData[selectedIndex!!]
+                    val pct = if (sel.third > 0) (sel.second * 100 / sel.third) else 0
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF19192C).copy(alpha = 0.95f))
+                            .border(1.dp, Color(0xFFA855F7).copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(sel.first, fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFFA855F7))
+                            Text("•", fontSize = 10.sp, color = colors.text3)
+                            Text("${sel.second} Tamamlandı", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC084FC))
+                            Text("/", fontSize = 10.sp, color = colors.text3)
+                            Text("${sel.third} Toplam", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA))
+                            Text("(%$pct)", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = if (pct >= 70) Color(0xFF22C55E) else Color(0xFFF97316))
                         }
                     }
                 }
@@ -1234,6 +1441,7 @@ fun SettingsScreen(viewModel: LookAtMeViewModel, onShowSnackbar: (String) -> Uni
     val isDark  by viewModel.isDarkMode.collectAsState()
     val notifOn by viewModel.notificationsEnabled.collectAsState()
     val colors  = if (isDark) DarkThemeColors else LightThemeColors
+    var showProgramSheet by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(colors.bgApp),
@@ -1248,28 +1456,19 @@ fun SettingsScreen(viewModel: LookAtMeViewModel, onShowSnackbar: (String) -> Uni
             Spacer(Modifier.height(8.dp))
         }
 
-        item { SectionLabel("Görünüm & Tema", colors) }
+        item { SectionLabel("Program & Rutinler", colors) }
         item {
             SettingsCard(colors) {
-                SettingsToggleRow(
-                    iconName = if (isDark) "moon" else "sun",
-                    title = "Karanlık / Aydınlık Mod",
-                    subtitle = if (isDark) "Aktif: Karanlık Tema" else "Aktif: Aydınlık (Warm Light)",
-                    checked = isDark,
-                    onCheckedChange = { viewModel.toggleDarkMode(it) },
-                    colors = colors
-                )
-                HorizontalDivider(color = colors.border)
-                SettingsToggleRow(
+                SettingsRow(
                     iconName = "calendar",
-                    title = "Hicri Takvim Görünümü",
-                    subtitle = if (isHijri) "Aktif: Hicri (Umm al-Qura)" else "Aktif: Miladi",
-                    checked = isHijri,
-                    onCheckedChange = { viewModel.toggleHijriMode(it) },
+                    title = "Haftalık Program",
+                    subtitle = "Ders ve etkinlik rutinlerini görüntüle, düzenle veya yeni ekle",
+                    onClick = { showProgramSheet = true },
                     colors = colors
                 )
             }
         }
+
 
         item { SectionLabel("Bildirimler", colors) }
         item {
@@ -1284,19 +1483,289 @@ fun SettingsScreen(viewModel: LookAtMeViewModel, onShowSnackbar: (String) -> Uni
                 )
             }
         }
+    }
 
-        item {
-            Spacer(Modifier.height(24.dp))
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "LookAtMe v1.2 • 2026",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.text3
+    if (showProgramSheet) {
+        ScheduleManagerSheet(
+            viewModel = viewModel,
+            isDark = isDark,
+            onDismiss = { showProgramSheet = false }
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  SCHEDULE MANAGER SHEET (HAFTALIK PROGRAM DÜZENLEME)
+// ─────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScheduleManagerSheet(
+    viewModel: LookAtMeViewModel,
+    isDark: Boolean,
+    onDismiss: () -> Unit
+) {
+    val colors = if (isDark) DarkThemeColors else LightThemeColors
+    val allSlots by viewModel.allActiveSlots.collectAsState()
+    val allCategories by viewModel.allCategories.collectAsState()
+    var selectedDayOfWeek by remember { mutableStateOf(0) } // 0=Pazartesi .. 6=Pazar
+    var editingSlot by remember { mutableStateOf<SlotEntity?>(null) }
+    var showAddSlot by remember { mutableStateOf(false) }
+
+    val dayNames = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
+    val fullDayNames = listOf("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = colors.bgApp,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        modifier = Modifier.fillMaxHeight(0.9f)
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        "Haftalık Program",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = colors.text1
+                    )
+                    Text(
+                        "Rutin ders ve etkinlikleri yönet",
+                        fontSize = 12.sp,
+                        color = colors.text3
+                    )
+                }
+                FilledTonalButton(
+                    onClick = { showAddSlot = true },
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xFF4F8EF7),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("+ Yeni Ekle", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Day Selector Tabs (Pzt, Sal, Çar, Per, Cum, Cmt, Paz)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.bgCard)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                dayNames.forEachIndexed { index, dayName ->
+                    val isSelected = selectedDayOfWeek == index
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .then(
+                                if (isSelected) Modifier.background(Brush.linearGradient(listOf(Color(0xFF4F8EF7), Color(0xFFA855F7))))
+                                else Modifier.background(Color.Transparent)
+                            )
+                            .clickable { selectedDayOfWeek = index }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = dayName,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            color = if (isSelected) Color.White else colors.text3
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
+                "${fullDayNames[selectedDayOfWeek]} Programı",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.text2
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            val daySlots = allSlots.filter { it.isRecurring && it.dayOfWeek == selectedDayOfWeek }
+                .sortedBy { it.startTime }
+
+            if (daySlots.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("📅", fontSize = 36.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "${fullDayNames[selectedDayOfWeek]} için kayıtlı etkinlik yok",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.text3
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { showAddSlot = true }) {
+                            Text("+ Bu güne etkinlik ekle", color = Color(0xFF4F8EF7), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    items(daySlots, key = { it.id }) { slot ->
+                        val accent = parseColorHex(slot.colorHex, categoryAccent(slot.category, slot.colorHex))
+                        val slotIconName = slot.emoji.ifBlank {
+                            allCategories.firstOrNull { it.id == slot.category }?.iconName ?: slot.category
+                        }
+                        val bgBitmap = remember(slot.bgStyle) {
+                            val s = slot.bgStyle
+                            if (s.isNotBlank() && s != "default" && !s.startsWith("gradient_") && s != "solid") {
+                                try {
+                                    if (File(s).exists()) BitmapFactory.decodeFile(s)?.asImageBitmap() else null
+                                } catch (_: Exception) { null }
+                            } else null
+                        }
+                        val textPrimary = if (bgBitmap != null) (if (isDark) Color.White else colors.text1) else colors.text1
+                        val textTertiary = if (bgBitmap != null) (if (isDark) Color.White.copy(alpha = 0.72f) else colors.text3) else colors.text3
+
+                        Card(
+                            onClick = { editingSlot = slot },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = colors.bgCard),
+                            border = BorderStroke(1.dp, colors.border),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                if (bgBitmap != null) {
+                                    Image(
+                                        bitmap = bgBitmap,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.matchParentSize()
+                                    )
+                                    val scrimBrush = if (isDark) {
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Color.Black.copy(alpha = 0.62f),
+                                                Color.Black.copy(alpha = 0.88f)
+                                            )
+                                        )
+                                    } else {
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Color.White.copy(alpha = 0.78f),
+                                                Color.White.copy(alpha = 0.94f)
+                                            )
+                                        )
+                                    }
+                                    Box(modifier = Modifier.matchParentSize().background(scrimBrush))
+                                }
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (bgBitmap != null) {
+                                                    if (isDark) Color.Black.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.85f)
+                                                } else accent.copy(alpha = 0.15f)
+                                            )
+                                            .then(if (bgBitmap != null) Modifier.border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(10.dp)) else Modifier),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        LucideIcon(title = slot.title, category = slot.category, iconName = slotIconName, tint = accent, modifier = Modifier.size(20.dp))
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            slot.title,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = textPrimary
+                                        )
+                                        Text(
+                                            "${slot.startTime} – ${slot.endTime}" + if (slot.subtitle.isNotBlank()) " • ${slot.subtitle}" else "",
+                                            fontSize = 11.sp,
+                                            color = textTertiary
+                                        )
+                                    }
+                                    Text("✏️ Düzenle", fontSize = 11.sp, color = if (bgBitmap != null && isDark) Color(0xFF93C5FD) else Color(0xFF4F8EF7), fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    editingSlot?.let { slot ->
+        EditSlotSheet(
+            existingSlot = SlotUiItem(slot, SlotState.FUTURE, null),
+            defaultDate = LocalDate.now(),
+            categories = allCategories,
+            onAddCategory = { id, name, icon, colorHex, bgStyle ->
+                viewModel.addCategory(id, name, icon, colorHex, bgStyle)
+            },
+            isDark = isDark,
+            onDismiss = { editingSlot = null },
+            onSave = { title, emoji, sub, cat, start, end, recurring, colorHex, bgStyle ->
+                viewModel.updateSlot(slot.copy(
+                    title = title, emoji = emoji, subtitle = sub,
+                    category = cat, startTime = start, endTime = end,
+                    dayOfWeek = if (recurring) selectedDayOfWeek else -1,
+                    isRecurring = recurring,
+                    colorHex = colorHex,
+                    bgStyle = bgStyle
+                ))
+            },
+            onDelete = {
+                viewModel.deleteSlot(slot.id)
+            }
+        )
+    }
+
+    if (showAddSlot) {
+        EditSlotSheet(
+            existingSlot = null,
+            defaultDate = LocalDate.now(),
+            categories = allCategories,
+            onAddCategory = { id, name, icon, colorHex, bgStyle ->
+                viewModel.addCategory(id, name, icon, colorHex, bgStyle)
+            },
+            isDark = isDark,
+            onDismiss = { showAddSlot = false },
+            onSave = { title, emoji, sub, cat, start, end, recurring, colorHex, bgStyle ->
+                viewModel.addSlot(
+                    title = title, emoji = emoji, subtitle = sub,
+                    category = cat, startTime = start, endTime = end,
+                    dayOfWeek = selectedDayOfWeek,
+                    specificDate = null,
+                    isRecurring = true,
+                    colorHex = colorHex,
+                    bgStyle = bgStyle
                 )
             }
-            Spacer(Modifier.height(20.dp))
-        }
+        )
     }
 }
 
@@ -1341,7 +1810,10 @@ private fun SettingsToggleRow(
     colors: ThemeColors
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -1350,15 +1822,11 @@ private fun SettingsToggleRow(
             Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.text1)
             Text(subtitle, fontSize = 11.sp, color = colors.text3)
         }
-        Switch(
+        SleekSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Color(0xFFA855F7),
-                uncheckedThumbColor = colors.text3,
-                uncheckedTrackColor = colors.bgCard2
-            )
+            activeColor = Color(0xFFA855F7),
+            inactiveColor = colors.border
         )
     }
 }
